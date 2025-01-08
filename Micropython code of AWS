@@ -1,0 +1,124 @@
+#micropython code for the project.
+#configure the wifi with the ssid and password in the required place.
+
+from time import sleep
+from machine import Pin
+from machine import ADC,UART
+import urequests
+import network
+ 
+import ujson
+import gc
+
+import re #for data splitting in wind sensor
+
+#sensor info
+
+rain_count=0 #initialising the rain_count as 0
+rain_pin = 19 #connection to Pin-25, GPIO-19
+rain_sense = Pin(rain_pin, Pin.IN, Pin.PULL_UP)
+
+
+temp_pin=26 #connection to Pin-31, GPIO-26
+temp_sense = machine.ADC(temp_pin)
+
+humidity_pin = 28 #connection to Pin-34, GPIO-28
+hum_sense=machine.ADC(humidity_pin)
+
+uart1_pressure= UART(0, baudrate=9600, tx=Pin(0), rx=Pin(1))
+uart1_pressure.init(bits=8, parity=None, stop=1)
+
+uart2_wind = UART(1, baudrate=9600, tx=Pin(4), rx=Pin(5))
+uart2_wind.init(bits=8, parity=None, stop=1)
+
+#wifi info
+ssid = 'addthessidofthewifi' #add the ssid of wifi 
+password = 'addthepassword' #add the wifi password
+
+
+# Connect to WiFi
+wlan = network.WLAN(network.STA_IF)
+wlan.active(True)
+wlan.connect(ssid, password)
+
+#connection info
+while not wlan.isconnected():
+    #print('Waiting for connection...')#may use print statements when connected with laptop.
+    time.sleep(0.5)
+
+#print('Connected to WiFi')
+
+#google appscript url
+url =  'https://script.google.com/macros/s/AKfycby_R8xTgajVmCcr1dVuaappFfnuaotQy_KM4ZFmri8Xo-9CYsqMBChSxlwATuQNSl5T5Q/exec'
+while True: #infinite loop
+    
+    if uart1_pressure.any(): #checking if data is available
+        pressure_val=uart1_pressure.read().decode('utf-8').striplines() #reading the pressure sensor value
+        
+        # Regular expression to capture "xxx,yyy" and similar pairs
+        pattern_pressure = r"Q,(\d+,\d+)"
+        
+        pressure_line =pressure_val[0]#gets only one line
+        
+        # Use re.findall to find all matches
+        matches_pressure = re.findall(pattern_pressure, pressure_line)#returns the extracted pattern as list of tuples.
+
+        # Display the extracted pairs
+       
+        
+        if matches_pressure:
+            pressure = str(matches_pressure[0][0])
+        else:
+            pressure = "No Data"
+
+    
+    if uart2_wind.any():
+        wind=uart2_wind.read().decode('utf-8').splitlines()
+        
+        # Define a regular expression to extract wind speed and direction after "Q,"
+        pattern = r"Q,(\d+),([\d.]+)" 
+
+        # if more than one line is received, Only use the first line, instead of iterating through all lines
+        line = wind[0]
+        #find the pattern in the extracted line
+        matches = re.findall(pattern, line) #returns the extracted pattern as list of tuples
+
+    
+        #separating out the wind speed and wind direction 
+        if matches:
+            windspeed=str(matches[0][0]) #takes out windspeed from extracted pattern
+            winddirection=str(matches[0][1]) #takes out winddirection from extracted pattern
+        else:
+            windspeed="No Data"
+            winddirection="No Data"
+            
+    temp_val=temp_sense.read_u16()
+    humidity_val=hum_sense.read_u16()
+    #adc conversion factor for temperature and humidity sensor. Calculations mentioned in the documentation. 
+    temperature=str((((100)/ (19737.76))*temp_val)-42.0265)
+    humidity=str(((100/19737.76)*humidity_val)-2.0265)
+    
+    rain=rain_sense.value()
+    if(rain == 1):#if we receive 3.3V
+        rain_count+=0.5 #0.5 mm is added
+    
+    rain_count=str(rain_count)
+    #print("Temperature:"+temperature+" Humidity:"+humidity+" Pressure:"+pressure+" Wind:" + wind+" Rain gauge:"+rain_count)
+    
+    
+    
+    data = {'temperature': temperature, 'humidity': humidity, 'pressure': pressure, 'windspeed': windspeed,'winddirection': winddirection, 'rain': rain_count}
+    headers = {"Content-Type": "application/json"}
+
+    #  request
+    response = urequests.post(url, data=ujson.dumps(data), headers=headers)
+    response.close() #connection closed
+    
+    #print("sheet updated")
+    
+    gc.collect() #to free up memory space
+    sleep(1) #sleep for one second
+    
+    
+    
+    
